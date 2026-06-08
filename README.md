@@ -6,6 +6,48 @@
 
 ## 一键安装
 
+### Ubuntu 20.04 及以上
+
+推荐 Ubuntu 20.04、22.04、24.04 等新系统使用这个脚本：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install-ubuntu20-plus.sh?$(date +%s)" -o install-ubuntu20-plus.sh
+bash install-ubuntu20-plus.sh
+```
+
+脚本会提示输入 API Key，输入时不会显示，回车后自动写入：
+
+```text
+~/.codex/config.toml
+~/.codex/auth.json
+```
+
+Ubuntu 20.04+ 脚本生成的 `~/.codex/config.toml` 为：
+
+```toml
+model_provider = "custom"
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
+disable_response_storage = true
+service_tier = "fast"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = false
+base_url = "https://api.antithor.asia/v1"
+```
+
+生成的 `~/.codex/auth.json` 为：
+
+```json
+{
+  "OPENAI_API_KEY": "你的 API Key"
+}
+```
+
+### Ubuntu 18.04
+
 在服务器终端运行：
 
 ```bash
