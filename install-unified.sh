@@ -9,7 +9,7 @@ CODEX_SERVICE_TIER="${CODEX_SERVICE_TIER:-fast}"
 CODEX_BASE_URL="${CODEX_BASE_URL:-https://api.antithor.asia/v1}"
 PROVIDER_NAME="${PROVIDER_NAME:-custom}"
 CCSWITCH_VERSION="${CCSWITCH_VERSION:-latest}"
-CCSWITCH_BASE_URL="${CCSWITCH_BASE_URL:-https://github.com/ccswitchcli/ccswitch/releases}"
+CCSWITCH_BASE_URL="${CCSWITCH_BASE_URL:-https://github.com/${CCSWITCH_REPO}/releases}"
 
 log() {
   printf '\n[%s] %s\n' "$(date +'%H:%M:%S')" "$*"
@@ -40,7 +40,7 @@ detect_arch() {
   local arch
   arch="$(uname -m)"
   case "$arch" in
-    x86_64|amd64) echo "amd64" ;;
+    x86_64|amd64) echo "x86_64" ;;
     aarch64|arm64) echo "arm64" ;;
     *) die "不支持的架构: $arch" ;;
   esac
@@ -84,7 +84,7 @@ install_ccswitch() {
   if [ "$version" = "latest" ]; then
     log "获取 CC Switch 最新版本"
     local latest_url
-    latest_url="$(curl -fsSL https://api.github.com/repos/ccswitchcli/ccswitch/releases/latest | grep -o '"browser_download_url": *"[^"]*"' | grep "${arch}.deb" | head -1 | cut -d'"' -f4)"
+    latest_url="$(curl -fsSL https://api.github.com/repos/${CCSWITCH_REPO}/releases/latest | grep -o '"browser_download_url": *"[^"]*"' | grep "Linux-${arch}.deb" | head -1 | cut -d'"' -f4)"
     if [ -z "$latest_url" ]; then
       log "警告：无法获取 CC Switch 下载链接，跳过安装"
       return 0
