@@ -8,6 +8,7 @@ CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT:-xhigh}"
 CODEX_SERVICE_TIER="${CODEX_SERVICE_TIER:-fast}"
 CODEX_BASE_URL="${CODEX_BASE_URL:-https://api.antithor.asia/v1}"
 PROVIDER_NAME="${PROVIDER_NAME:-custom}"
+CCSWITCH_REPO="${CCSWITCH_REPO:-farion1231/cc-switch}"
 CCSWITCH_VERSION="${CCSWITCH_VERSION:-latest}"
 CCSWITCH_BASE_URL="${CCSWITCH_BASE_URL:-https://github.com/${CCSWITCH_REPO}/releases}"
 
@@ -27,8 +28,10 @@ has_cmd() {
 sudo_if_needed() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
-  else
+  elif has_cmd sudo; then
     sudo "$@"
+  else
+    die "当前用户不是 root，且系统未安装 sudo，无法执行需要管理员权限的命令: $*"
   fi
 }
 
@@ -69,14 +72,71 @@ check_codex_installed() {
   return 1
 }
 
+codex_npm_entry_exists() {
+  export NVM_DIR="$HOME/.nvm"
+  if [ -s "$NVM_DIR/nvm.sh" ]; then
+    # shellcheck source=/dev/null
+    . "$NVM_DIR/nvm.sh"
+  fi
+
+  if ! has_cmd node || ! has_cmd npm; then
+    return 1
+  fi
+
+  local codex_js
+  codex_js="$(npm root -g 2>/dev/null)/@openai/codex/bin/codex.js"
+  [ -f "$codex_js" ]
+}
+
+backup_stale_codex_wrapper() {
+  local wrapper="$HOME/.local/bin/codex"
+
+  if [ ! -f "$wrapper" ]; then
+    return 0
+  fi
+
+  if grep -q '@openai/codex/bin/codex.js' "$wrapper" 2>/dev/null; then
+    local backup="${wrapper}.bak-$(date +'%Y%m%d-%H%M%S')"
+    mv "$wrapper" "$backup"
+    log "检测到旧的 Codex npm 包装脚本，但当前没有 npm 版 Codex，已备份: $backup"
+  fi
+}
+
+ensure_base_dependencies() {
+  local missing=()
+  for cmd in curl git tar xz; do
+    if ! has_cmd "$cmd"; then
+      missing+=("$cmd")
+    fi
+  done
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  if ! has_cmd apt-get; then
+    die "缺少命令: ${missing[*]}，并且没有找到 apt-get。"
+  fi
+
+  log "安装基础依赖: ${missing[*]}"
+  sudo_if_needed apt-get update
+  sudo_if_needed apt-get install -y curl git ca-certificates tar xz-utils
+}
+
 install_ccswitch() {
   local arch="$1"
   local version="$2"
 
   log "检测到 Ubuntu 22.04+，准备安装 CC Switch"
 
-  if has_cmd ccswitch; then
+  if has_cmd cc-switch; then
     log "CC Switch 已安装，跳过"
+    create_ccswitch_desktop_shortcut || true
+    return 0
+  fi
+
+  if [ "$(id -u)" -ne 0 ] && ! has_cmd sudo; then
+    log "警告：当前用户不是 root 且未安装 sudo，跳过 CC Switch 安装"
     return 0
   fi
 
@@ -84,33 +144,73 @@ install_ccswitch() {
   if [ "$version" = "latest" ]; then
     log "获取 CC Switch 最新版本"
     local latest_url
-    latest_url="$(curl -fsSL https://api.github.com/repos/${CCSWITCH_REPO}/releases/latest | grep -o '"browser_download_url": *"[^"]*"' | grep "Linux-${arch}.deb" | head -1 | cut -d'"' -f4)"
+    latest_url="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 60 https://api.github.com/repos/${CCSWITCH_REPO}/releases/latest 2>/dev/null | grep -o '"browser_download_url": *"[^"]*"' | grep "Linux-${arch}.deb" | head -1 | cut -d'"' -f4 || true)"
     if [ -z "$latest_url" ]; then
       log "警告：无法获取 CC Switch 下载链接，跳过安装"
       return 0
     fi
     deb_file="/tmp/ccswitch_${arch}.deb"
     log "下载 CC Switch: $latest_url"
-    curl -fsSL "$latest_url" -o "$deb_file"
+    if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 "$latest_url" -o "$deb_file"; then
+      log "警告：CC Switch 下载失败，跳过安装"
+      rm -f "$deb_file"
+      return 0
+    fi
   else
-    deb_file="/tmp/ccswitch_${version}_${arch}.deb"
-    local download_url="${CCSWITCH_BASE_URL}/download/v${version}/ccswitch_${version}_${arch}.deb"
+    deb_file="/tmp/CC-Switch-v${version}-Linux-${arch}.deb"
+    local download_url="${CCSWITCH_BASE_URL}/download/v${version}/CC-Switch-v${version}-Linux-${arch}.deb"
     log "下载 CC Switch: $download_url"
-    curl -fsSL "$download_url" -o "$deb_file"
+    if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 "$download_url" -o "$deb_file"; then
+      log "警告：CC Switch 下载失败，跳过安装"
+      rm -f "$deb_file"
+      return 0
+    fi
   fi
 
-  if [ ! -f "$deb_file" ]; then
+  if [ ! -s "$deb_file" ]; then
     log "警告：CC Switch 下载失败，跳过安装"
+    rm -f "$deb_file"
     return 0
   fi
 
   log "安装 CC Switch"
-  sudo_if_needed dpkg -i "$deb_file" || sudo_if_needed apt-get install -f -y
+  if ! sudo_if_needed apt-get install -y "$deb_file"; then
+    log "apt 安装 CC Switch 失败，尝试修复依赖"
+    sudo_if_needed apt-get install -f -y || true
+  fi
   rm -f "$deb_file"
 
-  if has_cmd ccswitch; then
-    log "CC Switch 安装成功: $(ccswitch --version 2>/dev/null || echo '已安装')"
+  if has_cmd cc-switch; then
+    log "CC Switch 安装成功: $(cc-switch --version 2>/dev/null || echo '已安装')"
+    create_ccswitch_desktop_shortcut || true
+  else
+    log "警告：CC Switch 安装后未找到 cc-switch 命令"
   fi
+}
+
+create_ccswitch_desktop_shortcut() {
+  local src="/usr/share/applications/CC Switch.desktop"
+
+  if [ ! -f "$src" ]; then
+    log "未找到 CC Switch 桌面入口: $src"
+    return 0
+  fi
+
+  local desktop_dir
+  if has_cmd xdg-user-dir; then
+    desktop_dir="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+  fi
+  desktop_dir="${desktop_dir:-$HOME/Desktop}"
+
+  mkdir -p "$desktop_dir"
+  cp "$src" "$desktop_dir/"
+  chmod +x "$desktop_dir/CC Switch.desktop"
+
+  if has_cmd gio; then
+    gio set "$desktop_dir/CC Switch.desktop" metadata::trusted true 2>/dev/null || true
+  fi
+
+  log "已创建桌面快捷方式: $desktop_dir/CC Switch.desktop"
 }
 
 upsert_managed_block() {
@@ -146,7 +246,8 @@ read_auth_json_key() {
     return 0
   fi
 
-  node -e '
+  if has_cmd node; then
+    node -e '
 const fs = require("fs");
 const file = process.argv[1];
 try {
@@ -154,10 +255,30 @@ try {
   if (value) process.stdout.write(value);
 } catch (_) {}
 ' "$auth_file" 2>/dev/null || true
+    return 0
+  fi
+
+  if has_cmd python3; then
+    python3 - "$auth_file" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        value = json.load(f).get("OPENAI_API_KEY", "")
+    if value:
+        print(value, end="")
+except Exception:
+    pass
+PY
+  fi
 }
 
 write_auth_json_key() {
-  AUTH_JSON_KEY="$1" node <<'NODE'
+  local key="$1"
+
+  if has_cmd node; then
+    AUTH_JSON_KEY="$key" node <<'NODE'
 const fs = require("fs");
 const path = require("path");
 
@@ -177,6 +298,33 @@ fs.writeFileSync(
 );
 fs.chmodSync(authFile, 0o600);
 NODE
+    return 0
+  fi
+
+  if has_cmd python3; then
+    AUTH_JSON_KEY="$key" python3 <<'PY'
+import json
+import os
+from pathlib import Path
+
+home = Path(os.environ["HOME"])
+key = os.environ["AUTH_JSON_KEY"]
+codex_dir = home / ".codex"
+auth_file = codex_dir / "auth.json"
+codex_dir.mkdir(parents=True, exist_ok=True)
+auth_file.write_text(json.dumps({"OPENAI_API_KEY": key}, indent=2) + "\n", encoding="utf-8")
+auth_file.chmod(0o600)
+PY
+    return 0
+  fi
+
+  local escaped_key
+  escaped_key="${key//\\/\\\\}"
+  escaped_key="${escaped_key//\"/\\\"}"
+  mkdir -p "$HOME/.codex"
+  umask 077
+  printf '{\n  "OPENAI_API_KEY": "%s"\n}\n' "$escaped_key" > "$HOME/.codex/auth.json"
+  chmod 600 "$HOME/.codex/auth.json"
 }
 
 if [ -z "${BASH_VERSION:-}" ]; then
@@ -223,6 +371,8 @@ case "$(uname -m)" in
   *) die "不支持的系统架构: $(uname -m)" ;;
 esac
 
+ensure_base_dependencies
+
 log "检查 Codex 是否已安装"
 if check_codex_installed; then
   log "检测到 Codex 已安装，跳过安装步骤"
@@ -233,26 +383,10 @@ else
 fi
 
 if [ "$SKIP_INSTALL" = false ]; then
-  missing=()
-  for cmd in curl git tar xz; do
-    if ! has_cmd "$cmd"; then
-      missing+=("$cmd")
-    fi
-  done
-
-  if [ "${#missing[@]}" -gt 0 ]; then
-    if ! has_cmd apt-get; then
-      die "缺少命令: ${missing[*]}，并且没有找到 apt-get。"
-    fi
-    log "安装基础依赖: ${missing[*]}"
-    sudo_if_needed apt-get update
-    sudo_if_needed apt-get install -y curl git ca-certificates tar xz-utils
-  fi
-
   log "安装/加载 nvm ${NVM_VERSION}"
   export NVM_DIR="$HOME/.nvm"
   if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
+    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 120 "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
   fi
 
   # shellcheck source=/dev/null
@@ -352,8 +486,9 @@ upsert_managed_block "$HOME/.profile" '# >>> codex-antithor-installer-ubuntu20-p
 upsert_managed_block "$HOME/.bashrc" '# >>> codex-antithor-installer-ubuntu20-plus >>>' '# <<< codex-antithor-installer-ubuntu20-plus <<<' "$SHELL_BLOCK"
 rm -f "$SHELL_BLOCK"
 
-mkdir -p "$HOME/.local/bin"
-cat > "$HOME/.local/bin/codex" <<'EOF'
+if codex_npm_entry_exists; then
+  mkdir -p "$HOME/.local/bin"
+  cat > "$HOME/.local/bin/codex" <<'EOF'
 #!/usr/bin/env bash
 set -e
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
@@ -370,13 +505,17 @@ if [ ! -f "$CODEX_JS" ]; then
 fi
 exec node "$CODEX_JS" "$@"
 EOF
-chmod +x "$HOME/.local/bin/codex"
+  chmod +x "$HOME/.local/bin/codex"
 
-if has_cmd sudo; then
-  log "安装 /usr/local/bin/codex 包装脚本"
-  sudo_if_needed install -m 0755 "$HOME/.local/bin/codex" /usr/local/bin/codex
+  if has_cmd sudo; then
+    log "安装 /usr/local/bin/codex 包装脚本"
+    sudo_if_needed install -m 0755 "$HOME/.local/bin/codex" /usr/local/bin/codex
+  else
+    log "未找到 sudo；仅安装包装脚本到 $HOME/.local/bin/codex"
+  fi
 else
-  log "未找到 sudo；仅安装包装脚本到 $HOME/.local/bin/codex"
+  backup_stale_codex_wrapper
+  log "Codex 已安装但不是本脚本管理的 nvm/npm 入口，跳过包装脚本覆盖"
 fi
 
 log "配置完成检查"
@@ -394,9 +533,9 @@ if has_cmd codex || [ -x "$HOME/.local/bin/codex" ]; then
   printf 'codex: '
   "$HOME/.local/bin/codex" --version 2>/dev/null || codex --version 2>/dev/null || echo "已安装"
 fi
-if has_cmd ccswitch; then
+if has_cmd cc-switch; then
   printf 'ccswitch: '
-  ccswitch --version 2>/dev/null || echo "已安装"
+  cc-switch --version 2>/dev/null || echo "已安装"
 fi
 printf '配置文件: %s\n' "$HOME/.codex/config.toml"
 printf 'Codex 认证文件: %s\n' "$HOME/.codex/auth.json"
@@ -407,8 +546,8 @@ cat <<'EOF'
 
 建议继续测试：
   hash -r
-  /usr/local/bin/codex --version
-  /usr/local/bin/codex exec --skip-git-repo-check "hello"
+  codex --version
+  codex exec --skip-git-repo-check "hello"
 
 生成的配置文件：
   ~/.codex/config.toml
@@ -421,4 +560,3 @@ Ubuntu 版本适配说明：
   - Ubuntu 20.04+: Node.js 22
   - Ubuntu 22.04+: 额外安装 CC Switch
 EOF
-

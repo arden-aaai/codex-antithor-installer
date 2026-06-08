@@ -6,13 +6,21 @@
 
 ## 一键安装
 
-### Ubuntu 20.04 及以上
+### 推荐：统一安装脚本
 
-推荐 Ubuntu 20.04、22.04、24.04 等新系统使用这个脚本：
+推荐所有 Ubuntu 18.04 及以上系统优先使用统一脚本：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install-ubuntu20-plus.sh?$(date +%s)" -o install-ubuntu20-plus.sh
-bash install-ubuntu20-plus.sh
+curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install-unified.sh?$(date +%s)" -o install-unified.sh
+bash install-unified.sh
+```
+
+统一脚本会自动检测系统版本：
+
+```text
+Ubuntu 18.04  -> Node.js 16
+Ubuntu 20.04+ -> Node.js 22
+Ubuntu 22.04+ -> 额外安装 CC Switch，并创建桌面快捷方式
 ```
 
 脚本会提示输入 API Key，输入时不会显示，回车后自动写入：
@@ -22,7 +30,7 @@ bash install-ubuntu20-plus.sh
 ~/.codex/auth.json
 ```
 
-Ubuntu 20.04+ 脚本生成的 `~/.codex/config.toml` 为：
+统一脚本生成的 `~/.codex/config.toml` 为：
 
 ```toml
 model_provider = "custom"
@@ -44,6 +52,15 @@ base_url = "https://api.antithor.asia/v1"
 {
   "OPENAI_API_KEY": "你的 API Key"
 }
+```
+
+### 备用：Ubuntu 20.04 及以上专用脚本
+
+如果不想安装 CC Switch，只想使用 Codex CLI 配置脚本，可以运行：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install-ubuntu20-plus.sh?$(date +%s)" -o install-ubuntu20-plus.sh
+bash install-ubuntu20-plus.sh
 ```
 
 ### Ubuntu 18.04
@@ -76,16 +93,16 @@ bash install.sh
 
 ## 脚本会做什么
 
-- 安装 nvm。
-- 安装 Node.js 16，兼容 Ubuntu 18.04。
+- 自动检测 Ubuntu 版本。
+- Ubuntu 18.04 安装 Node.js 16。
+- Ubuntu 20.04 及以上安装 Node.js 22。
 - 安装 `@openai/codex`。
 - 写入 Codex 配置文件：`~/.codex/config.toml`。
 - 把 API Key 明文保存到 Codex 会读取的认证文件：`~/.codex/auth.json`。
-- 同时把 API Key 保存到兼容用的环境变量文件：`~/.codex/env`。
-- 设置 `~/.codex/auth.json` 和 `~/.codex/env` 权限为 `600`。
-- 执行 `codex login --with-api-key`，让 Codex 官方登录缓存也写入成功。
-- 创建 `codex` 启动包装脚本：`~/.local/bin/codex`。
-- 尝试安装 `/usr/local/bin/codex`，方便 Codex Desktop 远程 SSH 检测。
+- 设置 `~/.codex/auth.json` 和 `~/.codex/config.toml` 权限为 `600`。
+- 如果 Codex 是本脚本安装的 nvm/npm 版本，会创建 `~/.local/bin/codex` 包装脚本。
+- 如果有 sudo，会尝试安装 `/usr/local/bin/codex`，方便 Codex Desktop 远程 SSH 检测。
+- Ubuntu 22.04 及以上会额外安装 CC Switch，并创建桌面快捷方式。
 
 ## 默认配置
 
@@ -99,7 +116,7 @@ Service tier: fast
 认证文件: ~/.codex/auth.json
 ```
 
-生成的 Codex 配置大致如下：
+统一脚本生成的 Codex 配置如下：
 
 ```toml
 model_provider = "custom"
@@ -107,21 +124,18 @@ model = "gpt-5.5"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 service_tier = "fast"
-cli_auth_credentials_store = "file"
-forced_login_method = "api"
 
 [model_providers.custom]
 name = "custom"
 wire_api = "responses"
-requires_openai_auth = true
-base_url = "https://api.antithor.asia/"
+requires_openai_auth = false
+base_url = "https://api.antithor.asia/v1"
 ```
 
-生成的 `~/.codex/auth.json` 大致如下：
+统一脚本生成的 `~/.codex/auth.json` 如下：
 
 ```json
 {
-  "auth_mode": "apikey",
   "OPENAI_API_KEY": "你的 API Key"
 }
 ```
@@ -132,8 +146,8 @@ base_url = "https://api.antithor.asia/"
 
 ```bash
 hash -r
-/usr/local/bin/codex --version
-/usr/local/bin/codex exec --skip-git-repo-check "hello"
+codex --version
+codex exec --skip-git-repo-check "hello"
 ```
 
 如果 `codex --version` 能输出版本号，说明 Codex CLI 已经安装成功。
@@ -151,11 +165,11 @@ Missing environment variable: `ANTITHOR_API_KEY`.
 说明你还在用旧配置。重新拉取最新脚本并运行：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install.sh?$(date +%s)" -o install.sh
-bash install.sh
+curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install-unified.sh?$(date +%s)" -o install-unified.sh
+bash install-unified.sh
 ```
 
-新版脚本不会在 `config.toml` 里写 `env_key = "ANTITHOR_API_KEY"`，而是使用 `requires_openai_auth = true` 和 `~/.codex/auth.json`。
+统一脚本不会在 `config.toml` 里写 `env_key = "ANTITHOR_API_KEY"`，而是使用 `requires_openai_auth = false` 和 `~/.codex/auth.json`。
 
 如果看到：
 
@@ -203,13 +217,13 @@ sudo apt update && sudo apt install -y bubblewrap
 可以在运行脚本前指定模型：
 
 ```bash
-CODEX_MODEL=gpt-5.4 CODEX_REASONING_EFFORT=medium bash install.sh
+CODEX_MODEL=gpt-5.4 CODEX_REASONING_EFFORT=medium bash install-unified.sh
 ```
 
 也可以修改中转站地址：
 
 ```bash
-CODEX_BASE_URL=https://你的中转站地址 bash install.sh
+CODEX_BASE_URL=https://你的中转站地址 bash install-unified.sh
 ```
 
 ## 注意事项
@@ -217,4 +231,4 @@ CODEX_BASE_URL=https://你的中转站地址 bash install.sh
 - 不要把 API Key 写进 GitHub。
 - 脚本会交互式读取 API Key，并保存到服务器当前用户自己的 `~/.codex/auth.json`。
 - 如果之前已经有 `~/.codex/config.toml`，脚本会先自动备份。
-- Ubuntu 18.04 推荐使用 Node.js 16，因此脚本默认安装 Node 16。
+- Ubuntu 18.04 使用 Node.js 16；Ubuntu 20.04 及以上使用 Node.js 22。
