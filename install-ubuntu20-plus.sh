@@ -11,11 +11,15 @@ CODEX_BASE_URL="${CODEX_BASE_URL:-https://api.antithor.asia/v1}"
 PROVIDER_NAME="${PROVIDER_NAME:-custom}"
 
 log() {
-  printf '\n[%s] %s\n' "$(date +'%H:%M:%S')" "$*"
+  printf '
+[%s] %s
+' "$(date +'%H:%M:%S')" "$*"
 }
 
 die() {
-  printf '\n错误: %s\n' "$*" >&2
+  printf '
+错误: %s
+' "$*" >&2
   exit 1
 }
 
@@ -32,7 +36,32 @@ sudo_if_needed() {
 }
 
 version_ge() {
-  [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n 1)" = "$2" ]
+  [ "$(printf '%s
+%s
+' "$2" "$1" | sort -V | head -n 1)" = "$2" ]
+}
+
+check_codex_installed() {
+  if has_cmd codex; then
+    if codex --version >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  export NVM_DIR="$HOME/.nvm"
+  if [ -s "$NVM_DIR/nvm.sh" ]; then
+    # shellcheck source=/dev/null
+    . "$NVM_DIR/nvm.sh"
+    if has_cmd node && has_cmd npm; then
+      local codex_js
+      codex_js="$(npm root -g 2>/dev/null)/@openai/codex/bin/codex.js"
+      if [ -f "$codex_js" ]; then
+        return 0
+      fi
+    fi
+  fi
+
+  return 1
 }
 
 upsert_managed_block() {
@@ -54,9 +83,12 @@ upsert_managed_block() {
 
   {
     cat "$tmp_file"
-    printf '\n%s\n' "$start_marker"
+    printf '
+%s
+' "$start_marker"
     cat "$block_file"
-    printf '%s\n' "$end_marker"
+    printf '%s
+' "$end_marker"
   } > "$file"
 
   rm -f "$tmp_file"
@@ -94,7 +126,8 @@ const authFile = path.join(codexDir, "auth.json");
 fs.mkdirSync(codexDir, { recursive: true });
 fs.writeFileSync(
   authFile,
-  JSON.stringify({ OPENAI_API_KEY: key }, null, 2) + "\n",
+  JSON.stringify({ OPENAI_API_KEY: key }, null, 2) + "
+",
   { mode: 0o600 }
 );
 fs.chmodSync(authFile, 0o600);
@@ -114,7 +147,8 @@ fi
 
 # shellcheck source=/dev/null
 . /etc/os-release
-printf 'OS: %s\n' "${PRETTY_NAME:-unknown}"
+printf 'OS: %s
+' "${PRETTY_NAME:-unknown}"
 
 if [ "${ID:-}" != "ubuntu" ]; then
   die "此脚本仅面向 Ubuntu 20.04 及以上系统。当前系统: ${PRETTY_NAME:-unknown}"
@@ -129,45 +163,62 @@ case "$(uname -m)" in
   *) die "不支持的系统架构: $(uname -m)" ;;
 esac
 
-missing=()
-for cmd in curl git tar xz; do
-  if ! has_cmd "$cmd"; then
-    missing+=("$cmd")
-  fi
-done
-
-if [ "${#missing[@]}" -gt 0 ]; then
-  if ! has_cmd apt-get; then
-    die "缺少命令: ${missing[*]}，并且没有找到 apt-get。"
-  fi
-  log "安装基础依赖: ${missing[*]}"
-  sudo_if_needed apt-get update
-  sudo_if_needed apt-get install -y curl git ca-certificates tar xz-utils
+log "检查 Codex 是否已安装"
+if check_codex_installed; then
+  log "检测到 Codex 已安装，跳过安装步骤"
+  SKIP_INSTALL=true
+else
+  log "未检测到 Codex，将进行完整安装"
+  SKIP_INSTALL=false
 fi
 
-log "安装/加载 nvm ${NVM_VERSION}"
-export NVM_DIR="$HOME/.nvm"
-if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-  curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
-fi
+if [ "$SKIP_INSTALL" = false ]; then
+  missing=()
+  for cmd in curl git tar xz; do
+    if ! has_cmd "$cmd"; then
+      missing+=("$cmd")
+    fi
+  done
 
-# shellcheck source=/dev/null
-. "$NVM_DIR/nvm.sh"
+  if [ "${#missing[@]}" -gt 0 ]; then
+    if ! has_cmd apt-get; then
+      die "缺少命令: ${missing[*]}，并且没有找到 apt-get。"
+    fi
+    log "安装基础依赖: ${missing[*]}"
+    sudo_if_needed apt-get update
+    sudo_if_needed apt-get install -y curl git ca-certificates tar xz-utils
+  fi
 
-log "安装/使用 Node.js ${NODE_VERSION}"
-nvm install "$NODE_VERSION"
-nvm alias default "$NODE_VERSION"
-nvm use "$NODE_VERSION"
+  log "安装/加载 nvm ${NVM_VERSION}"
+  export NVM_DIR="$HOME/.nvm"
+  if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
+  fi
 
-log "安装 Codex CLI: ${CODEX_PACKAGE}"
-npm install -g --force "$CODEX_PACKAGE"
+  # shellcheck source=/dev/null
+  . "$NVM_DIR/nvm.sh"
 
-GLOBAL_NODE_ROOT="$(npm root -g)"
-CODEX_PACKAGE_DIR="$GLOBAL_NODE_ROOT/@openai/codex"
-CODEX_ENTRY_FILE="$CODEX_PACKAGE_DIR/bin/codex.js"
+  log "安装/使用 Node.js ${NODE_VERSION}"
+  nvm install "$NODE_VERSION"
+  nvm alias default "$NODE_VERSION"
+  nvm use "$NODE_VERSION"
 
-if [ ! -f "$CODEX_ENTRY_FILE" ]; then
-  die "Codex CLI 安装失败，未找到入口文件: $CODEX_ENTRY_FILE"
+  log "安装 Codex CLI: ${CODEX_PACKAGE}"
+  npm install -g --force "$CODEX_PACKAGE"
+
+  GLOBAL_NODE_ROOT="$(npm root -g)"
+  CODEX_PACKAGE_DIR="$GLOBAL_NODE_ROOT/@openai/codex"
+  CODEX_ENTRY_FILE="$CODEX_PACKAGE_DIR/bin/codex.js"
+
+  if [ ! -f "$CODEX_ENTRY_FILE" ]; then
+    die "Codex CLI 安装失败，未找到入口文件: $CODEX_ENTRY_FILE"
+  fi
+else
+  export NVM_DIR="$HOME/.nvm"
+  if [ -s "$NVM_DIR/nvm.sh" ]; then
+    # shellcheck source=/dev/null
+    . "$NVM_DIR/nvm.sh"
+  fi
 fi
 
 mkdir -p "$HOME/.codex"
@@ -178,18 +229,25 @@ if [ -z "$EXISTING_API_KEY" ]; then
 fi
 
 if [ -n "$EXISTING_API_KEY" ]; then
-  printf '\n检测到已有 API Key。\n直接回车保留旧 Key；输入新 Key 则覆盖。输入时不会显示：\n> '
+  printf '
+检测到已有 API Key。
+直接回车保留旧 Key；输入新 Key 则覆盖。输入时不会显示：
+> '
   IFS= read -r -s API_KEY_INPUT
-  printf '\n'
+  printf '
+'
   if [ -n "$API_KEY_INPUT" ]; then
     API_KEY_VALUE="$API_KEY_INPUT"
   else
     API_KEY_VALUE="$EXISTING_API_KEY"
   fi
 else
-  printf '\n请输入 API Key，然后回车。输入时不会显示，这是正常的：\n> '
+  printf '
+请输入 API Key，然后回车。输入时不会显示，这是正常的：
+> '
   IFS= read -r -s API_KEY_VALUE
-  printf '\n'
+  printf '
+'
 fi
 
 if [ -z "${API_KEY_VALUE:-}" ]; then
@@ -263,19 +321,27 @@ else
   log "未找到 sudo；仅安装包装脚本到 $HOME/.local/bin/codex"
 fi
 
-log "安装结果检查"
-printf 'node: '
-node -v
-printf 'npm: '
-npm -v
-printf 'codex: '
-"$HOME/.local/bin/codex" --version
-printf '配置文件: %s\n' "$HOME/.codex/config.toml"
-printf 'Codex 认证文件: %s\n' "$HOME/.codex/auth.json"
+log "配置完成检查"
+if has_cmd node; then
+  printf 'node: '
+  node -v
+fi
+if has_cmd npm; then
+  printf 'npm: '
+  npm -v
+fi
+if has_cmd codex || [ -x "$HOME/.local/bin/codex" ]; then
+  printf 'codex: '
+  "$HOME/.local/bin/codex" --version 2>/dev/null || codex --version 2>/dev/null || echo "已安装"
+fi
+printf '配置文件: %s
+' "$HOME/.codex/config.toml"
+printf 'Codex 认证文件: %s
+' "$HOME/.codex/auth.json"
 
 cat <<'EOF'
 
-安装完成。
+配置完成。
 
 建议继续测试：
   hash -r
