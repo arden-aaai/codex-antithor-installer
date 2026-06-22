@@ -25,6 +25,18 @@ has_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+log_error_excerpt() {
+  local file="$1"
+
+  if [ ! -s "$file" ]; then
+    return 0
+  fi
+
+  while IFS= read -r line; do
+    [ -n "$line" ] && log "  $line"
+  done < <(sed -n '1,3p' "$file")
+}
+
 sudo_if_needed() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
@@ -37,6 +49,16 @@ sudo_if_needed() {
 
 version_ge() {
   [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n 1)" = "$2" ]
+}
+
+normalize_version() {
+  local version="$1"
+
+  if [ "$version" = "latest" ]; then
+    printf '%s' "$version"
+  else
+    printf '%s' "${version#v}"
+  fi
 }
 
 detect_arch() {
@@ -102,6 +124,53 @@ backup_stale_codex_wrapper() {
   fi
 }
 
+check_apt_dns() {
+  if ! has_cmd getent; then
+    return 0
+  fi
+
+  local source_files=()
+  local host
+  local hosts
+
+  if [ -f /etc/apt/sources.list ]; then
+    source_files+=("/etc/apt/sources.list")
+  fi
+
+  if [ -d /etc/apt/sources.list.d ]; then
+    while IFS= read -r file; do
+      source_files+=("$file")
+    done < <(find /etc/apt/sources.list.d -type f \( -name '*.list' -o -name '*.sources' \) 2>/dev/null || true)
+  fi
+
+  if [ "${#source_files[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  hosts="$(
+    awk '
+      ($1 == "deb" || $1 == "deb-src") {
+        for (i = 2; i <= NF; i++) {
+          if ($i ~ /^[A-Za-z][A-Za-z0-9+.-]*:\/\//) print $i
+        }
+      }
+      $1 == "URIs:" {
+        for (i = 2; i <= NF; i++) print $i
+      }
+    ' "${source_files[@]}" 2>/dev/null |
+      sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://([^/]+).*#\1#' |
+      sort -u
+  )"
+
+  while IFS= read -r host; do
+    [ -z "$host" ] && continue
+    if ! getent hosts "$host" >/dev/null 2>&1; then
+      log "Warning: DNS cannot resolve apt source host: $host"
+      log "         If apt-get fails, check /etc/resolv.conf or the container network."
+    fi
+  done <<< "$hosts"
+}
+
 ensure_base_dependencies() {
   local missing=()
   for cmd in curl git tar xz; do
@@ -119,13 +188,138 @@ ensure_base_dependencies() {
   fi
 
   log "安装基础依赖: ${missing[*]}"
+  check_apt_dns
   sudo_if_needed apt-get update
   sudo_if_needed apt-get install -y curl git ca-certificates tar xz-utils
 }
 
-install_ccswitch() {
+ccswitch_asset_name() {
   local arch="$1"
   local version="$2"
+
+  printf 'CC-Switch-v%s-Linux-%s.deb' "$version" "$arch"
+}
+
+ccswitch_download_url_for_version() {
+  local arch="$1"
+  local version
+  version="$(normalize_version "$2")"
+
+  printf '%s/download/v%s/%s' "$CCSWITCH_BASE_URL" "$version" "$(ccswitch_asset_name "$arch" "$version")"
+}
+
+extract_ccswitch_download_url() {
+  local release_json="$1"
+  local arch="$2"
+  local target="Linux-${arch}.deb"
+  local url=""
+
+  if has_cmd node; then
+    url="$(
+      printf '%s' "$release_json" |
+        TARGET_ASSET="$target" node -e '
+const fs = require("fs");
+const target = process.env.TARGET_ASSET;
+try {
+  const release = JSON.parse(fs.readFileSync(0, "utf8"));
+  const asset = (release.assets || []).find((item) =>
+    item && item.name && item.name.endsWith(target) && item.browser_download_url
+  );
+  if (asset) process.stdout.write(asset.browser_download_url);
+} catch (_) {}
+' 2>/dev/null || true
+    )"
+  fi
+
+  if [ -z "$url" ]; then
+    url="$(
+      printf '%s' "$release_json" |
+        grep -o '"browser_download_url": *"[^"]*"' |
+        grep "$target" |
+        head -1 |
+        cut -d'"' -f4 || true
+    )"
+  fi
+
+  printf '%s' "$url"
+}
+
+extract_ccswitch_tag() {
+  local release_json="$1"
+  local tag=""
+
+  if has_cmd node; then
+    tag="$(
+      printf '%s' "$release_json" |
+        node -e '
+const fs = require("fs");
+try {
+  const release = JSON.parse(fs.readFileSync(0, "utf8"));
+  if (release.tag_name) process.stdout.write(release.tag_name);
+} catch (_) {}
+' 2>/dev/null || true
+    )"
+  fi
+
+  if [ -z "$tag" ]; then
+    tag="$(
+      printf '%s' "$release_json" |
+        grep -o '"tag_name": *"[^"]*"' |
+        head -1 |
+        cut -d'"' -f4 || true
+    )"
+  fi
+
+  printf '%s' "$tag"
+}
+
+resolve_ccswitch_latest_tag_from_redirect() {
+  local err_file
+  local effective_url
+  err_file="$(mktemp)"
+
+  effective_url="$(
+    curl -fsSLI -o /dev/null -w '%{url_effective}' \
+      --retry 2 --retry-delay 2 --connect-timeout 10 --max-time 45 \
+      "${CCSWITCH_BASE_URL}/latest" 2>"$err_file" || true
+  )"
+
+  if [ -n "$effective_url" ] && [ "$effective_url" != "${CCSWITCH_BASE_URL}/latest" ]; then
+    rm -f "$err_file"
+    printf '%s' "${effective_url##*/}"
+    return 0
+  fi
+
+  log "Warning: GitHub latest redirect lookup failed for ${CCSWITCH_BASE_URL}/latest"
+  log_error_excerpt "$err_file"
+  rm -f "$err_file"
+  return 0
+}
+
+download_file_with_diagnostics() {
+  local url="$1"
+  local output="$2"
+  local label="$3"
+  local err_file
+  local status
+
+  err_file="$(mktemp)"
+  if curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 "$url" -o "$output" 2>"$err_file"; then
+    rm -f "$err_file"
+    return 0
+  fi
+
+  status=$?
+  log "Warning: ${label} download failed, curl exit ${status}: $url"
+  log_error_excerpt "$err_file"
+  rm -f "$err_file"
+  return "$status"
+}
+
+install_ccswitch() {
+  local arch="$1"
+  local version
+  version="$(normalize_version "$2")"
 
   log "检测到 Ubuntu 22.04+，准备安装 CC Switch"
 
@@ -144,23 +338,57 @@ install_ccswitch() {
   if [ "$version" = "latest" ]; then
     log "获取 CC Switch 最新版本"
     local latest_url
-    latest_url="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 60 https://api.github.com/repos/${CCSWITCH_REPO}/releases/latest 2>/dev/null | grep -o '"browser_download_url": *"[^"]*"' | grep "Linux-${arch}.deb" | head -1 | cut -d'"' -f4 || true)"
+    local latest_json
+    local latest_tag
+    local latest_err
+    latest_url=""
+    latest_tag=""
+    latest_err="$(mktemp)"
+
+    if latest_json="$(curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${CCSWITCH_REPO}/releases/latest" 2>"$latest_err")"; then
+      latest_url="$(extract_ccswitch_download_url "$latest_json" "$arch")"
+      latest_tag="$(extract_ccswitch_tag "$latest_json")"
+      if [ -z "$latest_url" ] && [ -n "$latest_tag" ]; then
+        log "Warning: GitHub API returned latest tag $latest_tag, but no matching Linux-${arch}.deb asset was parsed."
+        latest_url="$(ccswitch_download_url_for_version "$arch" "$latest_tag")"
+        log "         Trying constructed URL: $latest_url"
+      fi
+    else
+      log "Warning: GitHub API request failed for ${CCSWITCH_REPO}/releases/latest"
+      log_error_excerpt "$latest_err"
+    fi
+    rm -f "$latest_err"
+
+    if [ -z "$latest_url" ]; then
+      latest_tag="$(resolve_ccswitch_latest_tag_from_redirect)"
+      if [ -n "$latest_tag" ]; then
+        latest_url="$(ccswitch_download_url_for_version "$arch" "$latest_tag")"
+        log "Fallback: resolved latest CC Switch tag from release redirect: $latest_tag"
+      fi
+    fi
+
+    if [ -z "$latest_url" ]; then
+      log "Warning: Cannot resolve CC Switch Linux-${arch}.deb download URL; skipping optional CC Switch install."
+      log "         Codex CLI installation will continue."
+      log "         You can retry with: CCSWITCH_VERSION=3.16.3 bash install-unified.sh"
+    fi
     if [ -z "$latest_url" ]; then
       log "警告：无法获取 CC Switch 下载链接，跳过安装"
       return 0
     fi
     deb_file="/tmp/ccswitch_${arch}.deb"
     log "下载 CC Switch: $latest_url"
-    if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 "$latest_url" -o "$deb_file"; then
+    if ! download_file_with_diagnostics "$latest_url" "$deb_file" "CC Switch"; then
       log "警告：CC Switch 下载失败，跳过安装"
       rm -f "$deb_file"
       return 0
     fi
   else
-    deb_file="/tmp/CC-Switch-v${version}-Linux-${arch}.deb"
-    local download_url="${CCSWITCH_BASE_URL}/download/v${version}/CC-Switch-v${version}-Linux-${arch}.deb"
+    deb_file="/tmp/$(ccswitch_asset_name "$arch" "$version")"
+    local download_url
+    download_url="$(ccswitch_download_url_for_version "$arch" "$version")"
     log "下载 CC Switch: $download_url"
-    if ! curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 "$download_url" -o "$deb_file"; then
+    if ! download_file_with_diagnostics "$download_url" "$deb_file" "CC Switch"; then
       log "警告：CC Switch 下载失败，跳过安装"
       rm -f "$deb_file"
       return 0
@@ -196,11 +424,31 @@ create_ccswitch_desktop_shortcut() {
     return 0
   fi
 
-  local desktop_dir
+  local desktop_dir=""
   if has_cmd xdg-user-dir; then
     desktop_dir="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
   fi
-  desktop_dir="${desktop_dir:-$HOME/Desktop}"
+
+  if [ -z "$desktop_dir" ] && [ -f "$HOME/.config/user-dirs.dirs" ]; then
+    desktop_dir="$(
+      awk -F= '$1 == "XDG_DESKTOP_DIR" {
+        gsub(/"/, "", $2)
+        gsub(/\$HOME/, ENVIRON["HOME"], $2)
+        print $2
+        exit
+      }' "$HOME/.config/user-dirs.dirs" 2>/dev/null || true
+    )"
+  fi
+
+  if [ -z "$desktop_dir" ]; then
+    if [ -d "$HOME/桌面" ]; then
+      desktop_dir="$HOME/桌面"
+    elif [ -d "$HOME/Desktop" ]; then
+      desktop_dir="$HOME/Desktop"
+    else
+      desktop_dir="$HOME/Desktop"
+    fi
+  fi
 
   mkdir -p "$desktop_dir"
   cp "$src" "$desktop_dir/"
@@ -543,11 +791,6 @@ printf 'Codex 认证文件: %s\n' "$HOME/.codex/auth.json"
 cat <<'EOF'
 
 配置完成。
-
-建议继续测试：
-  hash -r
-  codex --version
-  codex exec --skip-git-repo-check "hello"
 
 生成的配置文件：
   ~/.codex/config.toml
