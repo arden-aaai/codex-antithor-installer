@@ -1010,12 +1010,10 @@ printf '架构: %s\n' "$ARCH"
 printf '模型: %s\n' "$CODEX_MODEL"
 printf '中转站: %s\n' "$CODEX_BASE_URL"
 if has_cmd node; then
-  printf 'node: '
-  node -v
+  printf 'node: %s\n' "$(node -v 2>/dev/null || echo '未知')"
 fi
 if has_cmd npm; then
-  printf 'npm: '
-  npm -v
+  printf 'npm: %s\n' "$(npm -v 2>/dev/null || echo '未知')"
 fi
 for candidate in "$HOME/.local/bin/codex" "/usr/local/bin/codex"; do
   if [ -x "$candidate" ]; then

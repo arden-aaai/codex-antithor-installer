@@ -48,6 +48,8 @@ CODEX_API_KEY=sk-你的key bash install-unified.sh -y
 
 `-y` 表示所有确认都按“是”处理。Key 通过环境变量传入，不会出现在 shell 历史和 `ps` 输出里。
 
+不设置 `CODEX_API_KEY` 时，行为和以前完全一样：脚本会暂停并等待你手动输入 Key。这个变量只是给批量部署、自动化脚本用的可选通道。
+
 ## 脚本会做什么
 
 - 检测 Ubuntu 版本与 CPU 架构（x86_64 / arm64）。
