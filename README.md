@@ -1,87 +1,38 @@
 # Codex Antithor 一键安装脚本
 
-这个仓库用于在 Ubuntu 服务器上一键安装 Codex CLI，并配置为使用 Antithor 中转站。
+在 Ubuntu 服务器上一键安装 Codex CLI，并配置为使用 Antithor 中转站。
 
-适合给多人批量配置服务器。用户只需要在服务器里运行安装命令，脚本会暂停并提示输入自己的 API Key。
+适合给多人批量配置服务器：用户在服务器里运行一条命令，脚本会提示输入自己的 API Key，其余全部自动完成。
+
+## 当前版本与兼容性
+
+| 组件 | 版本 / 说明 |
+| --- | --- |
+| Codex CLI | `@openai/codex` 最新版（当前 `0.163.x`），默认装 `latest` |
+| Node.js | Ubuntu 18.04 → 16；Ubuntu 20.04 及以上 → 24（当前 LTS） |
+| nvm | `v0.40.8` |
+| CC Switch | 最新版（当前 `4.0.x`），仅 Ubuntu 22.04+ 安装 |
+| 默认模型 | `gpt-6.1-sol` |
+| 接口 | Responses API（`wire_api = "responses"`） |
+| 认证 | `~/.codex/auth.json` + `requires_openai_auth = true` |
 
 ## 一键安装
-
-### 推荐：统一安装脚本
-
-推荐所有 Ubuntu 18.04 及以上系统优先使用统一脚本：
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install-unified.sh?$(date +%s)" -o install-unified.sh
-bash install-unified.sh
-```
-
-统一脚本会自动检测系统版本：
-
-```text
-Ubuntu 18.04  -> Node.js 16
-Ubuntu 20.04+ -> Node.js 22
-Ubuntu 22.04+ -> 额外安装 CC Switch，并创建桌面快捷方式
-```
-
-脚本会提示输入 API Key，输入时不会显示，回车后自动写入：
-
-```text
-~/.codex/config.toml
-~/.codex/auth.json
-```
-
-统一脚本生成的 `~/.codex/config.toml` 为：
-
-```toml
-model_provider = "custom"
-model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-service_tier = "fast"
-
-[model_providers.custom]
-name = "custom"
-wire_api = "responses"
-requires_openai_auth = false
-base_url = "https://api.antithor.asia/v1"
-```
-
-生成的 `~/.codex/auth.json` 为：
-
-```json
-{
-  "OPENAI_API_KEY": "你的 API Key"
-}
-```
-
-### 备用：Ubuntu 20.04 及以上专用脚本
-
-如果不想安装 CC Switch，只想使用 Codex CLI 配置脚本，可以运行：
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install-ubuntu20-plus.sh?$(date +%s)" -o install-ubuntu20-plus.sh
-bash install-ubuntu20-plus.sh
-```
-
-### Ubuntu 18.04
 
 在服务器终端运行：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install.sh?$(date +%s)" -o install.sh
-bash install.sh
+curl -fsSL "https://raw.githubusercontent.com/arden-aaai/codex-antithor-installer/main/install-unified.sh?$(date +%s)" -o install-unified.sh
+bash install-unified.sh
 ```
 
-安装过程中会提示：
+脚本会暂停并提示输入 API Key（输入时不会显示，这是正常的）：
 
 ```text
 请输入 API Key，然后回车。输入时不会显示，这是正常的：
 >
 ```
 
-粘贴你的 API Key 后回车即可。输入过程中不会显示，这是正常的。
-
-如果服务器里已经有旧 Key，脚本会提示：
+如果服务器里已经有旧 Key，会提示：
 
 ```text
 检测到已有 API Key。
@@ -89,146 +40,210 @@ bash install.sh
 >
 ```
 
-如果要换 Key，就输入新 Key；如果继续用旧 Key，直接回车。
+### 非交互式安装（批量部署 / 自动化）
+
+```bash
+CODEX_API_KEY=sk-你的key bash install-unified.sh -y
+```
+
+`-y` 表示所有确认都按“是”处理。Key 通过环境变量传入，不会出现在 shell 历史和 `ps` 输出里。
 
 ## 脚本会做什么
 
-- 自动检测 Ubuntu 版本。
-- Ubuntu 18.04 安装 Node.js 16。
-- Ubuntu 20.04 及以上安装 Node.js 22。
-- 安装 `@openai/codex`。
-- 写入 Codex 配置文件：`~/.codex/config.toml`。
-- 把 API Key 明文保存到 Codex 会读取的认证文件：`~/.codex/auth.json`。
-- 设置 `~/.codex/auth.json` 和 `~/.codex/config.toml` 权限为 `600`。
-- 如果 Codex 是本脚本安装的 nvm/npm 版本，会创建 `~/.local/bin/codex` 包装脚本。
-- 如果有 sudo，会尝试安装 `/usr/local/bin/codex`，方便 Codex Desktop 远程 SSH 检测。
-- Ubuntu 22.04 及以上会额外安装 CC Switch，并创建桌面快捷方式。
+- 检测 Ubuntu 版本与 CPU 架构（x86_64 / arm64）。
+- 安装基础依赖：`curl`、`git`、`ca-certificates`、`tar`、`xz-utils`。
+- Ubuntu 18.04 使用 Node.js 16；Ubuntu 20.04 及以上使用 Node.js 24。
+- 通过 nvm 安装 Node.js，并写进 `~/.profile` / `~/.bashrc`，让登录 shell 和非交互 SSH 都能找到 `codex`。
+- 安装 `@openai/codex`（默认最新版）。
+- 写入 `~/.codex/config.toml` 与 `~/.codex/auth.json`，权限 `600`。
+- 创建 `~/.local/bin/codex` 包装脚本；有 sudo 时再装一份到 `/usr/local/bin/codex`（方便 Codex Desktop 远程 SSH 检测）。
+- Ubuntu 22.04 及以上额外安装 CC Switch，并创建桌面快捷方式；不想装可加 `--no-ccswitch`。
+- 覆盖旧配置前自动备份为 `config.toml.bak-时间戳`、`auth.json.bak-时间戳`。
 
-## 默认配置
+## 生成的配置
 
-```text
-Base URL: https://api.antithor.asia
-Model: gpt-5.5
-Wire API: responses
-Provider: custom
-Reasoning effort: xhigh
-Service tier: fast
-认证文件: ~/.codex/auth.json
-```
-
-统一脚本生成的 Codex 配置如下：
+`~/.codex/config.toml`：
 
 ```toml
 model_provider = "custom"
-model = "gpt-5.5"
+model = "gpt-6.1-sol"
 model_reasoning_effort = "xhigh"
-disable_response_storage = true
 service_tier = "fast"
 
 [model_providers.custom]
 name = "custom"
 wire_api = "responses"
-requires_openai_auth = false
+requires_openai_auth = true
 base_url = "https://api.antithor.asia/v1"
 ```
 
-统一脚本生成的 `~/.codex/auth.json` 如下：
+`~/.codex/auth.json`：
 
 ```json
 {
+  "auth_mode": "apikey",
   "OPENAI_API_KEY": "你的 API Key"
 }
 ```
 
-注意：API Key 会明文保存在服务器当前用户的 `~/.codex/auth.json` 中。脚本会设置文件权限为 `600`，但不要把这个文件上传到 GitHub。
+两个 `600` 权限的文件都是明文保存 Key，请不要上传到 GitHub，也不要把服务器上的这两个文件提交进任何仓库。
 
-## 安装后测试
+> **为什么是 `requires_openai_auth = true`？**
+> 新版 Codex 对自定义 provider 只有在 `requires_openai_auth = true` 时，才会把 `auth.json` 里的 `OPENAI_API_KEY` 作为 `Authorization: Bearer` 发出去。旧版脚本用的 `false` 会让请求不带任何 Key，中转站直接返回 `API_KEY_REQUIRED`。
+>
+> 旧配置里的 `disable_response_storage` 已被新版移除，继续写入会触发 `unrecognized configuration setting` 警告，因此新脚本不再生成它。
+
+## 常用参数
+
+| 参数 | 说明 |
+| --- | --- |
+| `-u`, `--upgrade` | 即使已是最新，也强制重装/升级 Codex CLI |
+| `--no-upgrade` | 跳过版本检查，不改动已安装的 Codex CLI |
+| `--no-ccswitch` | 不安装 CC Switch（Ubuntu 22.04+ 默认安装） |
+| `-y`, `--yes` | 所有确认都按“是”处理 |
+| `-h`, `--help` | 显示帮助 |
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `CODEX_MODEL` | `gpt-6.1-sol` | 模型名称 |
+| `CODEX_REASONING_EFFORT` | `xhigh` | 推理强度；留空则不写入该行 |
+| `CODEX_SERVICE_TIER` | `fast` | 服务等级（`fast` 会映射为请求里的 `priority`）；留空则不写入 |
+| `CODEX_BASE_URL` | `https://api.antithor.asia/v1` | 中转站地址 |
+| `CODEX_VERSION` | `latest` | 锁定 Codex CLI 版本，例如 `0.163.0` |
+| `CODEX_API_KEY` | 空 | 非交互式提供 Key（也可用 `OPENAI_API_KEY`） |
+| `NODE_VERSION` | 18.04 用 16，其余 24 | 覆盖 Node.js 版本 |
+| `NVM_VERSION` | `v0.40.8` | 覆盖 nvm 版本 |
+| `CCSWITCH_VERSION` | `latest` | 覆盖 CC Switch 版本 |
+| `INSTALL_GLOBAL_WRAPPER` | `auto` | `auto` / `1` / `0`，控制 `/usr/local/bin/codex` |
+
+示例：
+
+```bash
+# 换模型
+CODEX_MODEL=gpt-6-astra bash install-unified.sh
+
+# 换中转站
+CODEX_BASE_URL=https://你的中转站/v1 bash install-unified.sh
+
+# 锁定版本 + 不装 CC Switch
+CODEX_VERSION=0.163.0 bash install-unified.sh --no-ccswitch
+```
+
+可用的模型以你的中转站为准，目前常见的有 `gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-5.6-terra`、`gpt-5.6-sol` 等。
+
+## 更新已安装的 Codex
+
+直接重跑统一脚本即可，脚本会自动比较版本：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/arden-aaai/codex-antithor-installer/main/install-unified.sh?$(date +%s)" -o install-unified.sh
+bash install-unified.sh
+```
+
+- 已是最新：跳过安装，只更新配置。
+- 发现新版本：提示后升级（`-y` 时直接升级）。
+- 想强制重装：加 `--upgrade`。
+- 只想换 Key、完全不动 Codex：加 `--no-upgrade`。
+
+## 验证安装
 
 ```bash
 hash -r
 codex --version
+codex login status
 codex exec --skip-git-repo-check "hello"
 ```
 
-如果 `codex --version` 能输出版本号，说明 Codex CLI 已经安装成功。
-
-如果 `codex exec --skip-git-repo-check "hello"` 能正常返回，说明中转站和 API Key 配置可用。
+- `codex --version` 输出版本号 → CLI 安装成功。
+- `codex login status` 显示 `Logged in using an API key - sk-xxx***` → 认证文件生效。
+- `codex exec ...` 能正常返回 → 中转站和 Key 可用。
 
 ## 常见问题
 
-如果看到：
+**`401 API_KEY_REQUIRED` / `API key is required in Authorization header`**
 
-```text
-Missing environment variable: `ANTITHOR_API_KEY`.
-```
-
-说明你还在用旧配置。重新拉取最新脚本并运行：
+说明你还在用旧配置（`requires_openai_auth = false`），请求根本没有携带 Key。重新拉取并运行最新脚本即可：
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/771373073/codex-antithor-installer/main/install-unified.sh?$(date +%s)" -o install-unified.sh
+curl -fsSL "https://raw.githubusercontent.com/arden-aaai/codex-antithor-installer/main/install-unified.sh?$(date +%s)" -o install-unified.sh
 bash install-unified.sh
 ```
 
-统一脚本不会在 `config.toml` 里写 `env_key = "ANTITHOR_API_KEY"`，而是使用 `requires_openai_auth = false` 和 `~/.codex/auth.json`。
+**`401 INVALID_API_KEY` / `Invalid API key`**
 
-如果看到：
+Key 本身不对：确认复制完整、没有多余空格，或到中转站后台重新生成后重跑脚本。
 
-```text
-SyntaxError: Unexpected token 'export'
-```
+**`unrecognized configuration setting: disable_response_storage is ignored`**
 
-说明旧脚本曾经误覆盖过 npm 原始的 Codex 入口文件。重新运行最新脚本，它会自动清理并重装 Codex CLI。
+旧脚本生成的配置行。重跑最新脚本会重写 `config.toml`；也可以手动删掉这一行。
 
-如果看到：
+**`Missing environment variable: ANTITHOR_API_KEY`**
 
-```text
-Not inside a trusted directory and --skip-git-repo-check was not specified.
-```
+更早期的配置方式，现在已改为 `auth.json`。重跑最新脚本。
 
-这不是 API Key 问题。测试时使用：
+**`SyntaxError: Unexpected token 'export'`**
+
+旧脚本曾误覆盖 npm 原始的 Codex 入口文件。用 `--upgrade` 重跑本脚本会自动重装：
 
 ```bash
-codex exec --skip-git-repo-check "hello"
+bash install-unified.sh --upgrade
 ```
 
-如果看到 bubblewrap 警告：
+**`Not inside a trusted directory and --skip-git-repo-check was not specified`**
 
-```text
-Codex could not find bubblewrap on PATH
-```
+不是 Key 问题，测试时加 `--skip-git-repo-check` 即可。
 
-这也不是 API Key 问题。想消除警告可以安装：
+**`Codex could not find bubblewrap on PATH`**
+
+也不是 Key 问题。想消除警告：
 
 ```bash
 sudo apt update && sudo apt install -y bubblewrap
 ```
 
+**升级后 `codex` 还是旧版本**
+
+检查是不是先命中了别的 `codex`：
+
+```bash
+type -a codex
+hash -r
+```
+
+脚本会把包装脚本装到 `~/.local/bin/codex` 和 `/usr/local/bin/codex`，并让它们优先于其他路径。
+
 ## 给 Codex Desktop 远程 SSH 使用
 
-如果要在本地 Codex Desktop 连接这台服务器：
-
-1. 先确保本地可以正常 SSH 进入服务器。
+1. 确认本地能正常 SSH 进入服务器。
 2. 在服务器上运行本脚本并完成 API Key 配置。
 3. 回到 Codex Desktop 重新连接远程 SSH 主机。
-4. 如果仍提示“未安装 Codex”，退出服务器重新登录，或者重启 Codex Desktop 后再试。
+4. 如果仍提示“未安装 Codex”，退出服务器重新登录，或重启 Codex Desktop 再试。
 
-## 修改默认模型
+## 兼容入口
 
-可以在运行脚本前指定模型：
+`install.sh`（原 Ubuntu 18.04 专用）和 `install-ubuntu20-plus.sh`（原 20.04+ 专用）现在都只是转发器：下载并执行 `install-unified.sh`，参数会原样传递。
 
-```bash
-CODEX_MODEL=gpt-5.4 CODEX_REASONING_EFFORT=medium bash install-unified.sh
-```
-
-也可以修改中转站地址：
+保留它们只是为了兼容文档里已经发出去的旧链接：
 
 ```bash
-CODEX_BASE_URL=https://你的中转站地址 bash install-unified.sh
+bash install.sh                        # 等价于 bash install-unified.sh
+bash install-ubuntu20-plus.sh --no-ccswitch
 ```
 
-## 注意事项
+新用户请直接用 `install-unified.sh`。
 
-- 不要把 API Key 写进 GitHub。
-- 脚本会交互式读取 API Key，并保存到服务器当前用户自己的 `~/.codex/auth.json`。
-- 如果之前已经有 `~/.codex/config.toml`，脚本会先自动备份。
-- Ubuntu 18.04 使用 Node.js 16；Ubuntu 20.04 及以上使用 Node.js 22。
+## 非 Ubuntu 系统
+
+脚本只做 Ubuntu 适配（apt / nvm）。其他系统可以手动做三件事：
+
+1. 安装 Node.js 18+ 和 `npm i -g @openai/codex`。
+2. 按上面的内容写 `~/.codex/config.toml`。
+3. 按上面的内容写 `~/.codex/auth.json` 并 `chmod 600`。
+
+## 安全说明
+
+- API Key 明文保存在 `~/.codex/auth.json`，权限 `600`，属于当前登录用户。
+- 脚本不会把 Key 写进任何日志或仓库；非交互模式下 Key 通过环境变量传入。
+- 共用服务器时请注意：同机的 root 仍然可以读取该文件，敏感环境建议用独立账号。
